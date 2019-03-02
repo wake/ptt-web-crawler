@@ -1,0 +1,80 @@
+#!/usr/bin/env php
+<?php
+
+  define ('_ROOT', __DIR__);
+
+  require _ROOT . '/vendor/simple_html_dom.php';
+
+  $host = "https://www.ptt.cc";
+  $target = $host . "/bbs/Gamesale/index.html";
+  $pages = 3;
+  $cache = [];
+  $cacheMax = 100;
+  $update = [];
+
+  if (file_exists (_ROOT . '/cache'))
+    $cache = explode (',', file_get_contents (_ROOT . '/cache'));
+
+  for ($i=0; $i<$pages; $i++) {
+
+    $content = file_get_contents ($target);
+    $html = str_get_html ($content);
+
+    $links = $html->find ('.r-ent .title a');
+
+    // Extract
+    foreach ($links as $link) {
+
+      if (in_array ($link->href, $cache))
+        continue;
+
+      $title = $link->plaintext;
+
+      $isNS = mb_strpos ($title, 'NS') !== false;
+      $isSell = mb_strpos ($title, '售') !== false;
+
+      if ($isNS && $isSell) {
+        $article = file_get_contents ($host . $link->href);
+        $ahtml = str_get_html ($article);
+        $content = trim ($ahtml->find ('#main-container', 0)->plaintext);
+
+        foreach (['看板', '標題', '時間'] as $tag)
+          $content = str_replace ($tag, "\n$tag", $content);
+
+        $content = preg_replace ('/&[^;]*;/', '', $content);
+
+        if (! slack ($content))
+          slack ("Fetch \n`$title`\n{$host}{$link->href})\nerror");
+
+        //die;
+      }
+
+      $update[] = $link->href;
+    }
+
+    $next = $html->find ('.btn-group-paging a', 1);
+
+    if (! $next->href)
+      break;
+
+    $target = $host . $next->href;
+  }
+
+  if (count ($update) > 0)
+    file_put_contents (_ROOT . '/cache', implode (',', array_slice (array_merge ($update, $cache), 0, $cacheMax)));
+
+  function slack ($content) {
+
+    curl_setopt_array ($ch = curl_init (), array (
+      CURLOPT_URL => "", // Slack webhook url
+      CURLOPT_POSTFIELDS => "payload=" . json_encode ([
+        "text" => "📌\n" . $content,
+      ], JSON_HEX_QUOT),
+      CURLOPT_SAFE_UPLOAD => true,
+    ));
+
+    $res = curl_exec ($ch);
+    curl_close ($ch);
+
+    return $res;
+  }
